@@ -341,3 +341,20 @@ pago, el estado puede quedar confirmado sin que se complete la notificación.
 Investigar el fallo y recuperar el paso pendiente; no asumir que reabrir o volver
 a pulsar el checkout repara la entrega. `enviar_factura` permite reintentar la
 publicación de la URL, pero no reconstruye las propiedades del aviso de pago.
+
+## Orden de ejecución y dependencias del agente
+
+[docs/api-flow.json](docs/api-flow.json) documenta las ocho tools, su orden por
+flujo, los campos requeridos, el origen de cada dato y las respuestas que deben
+conservarse para la siguiente llamada. Incluye venta, renovación por producto,
+pago simulado, seguimiento, factura, consentimiento y escalamiento.
+
+Es un JSON documental, no un ejecutor ni una colección de Postman. Las referencias
+`state.*` y `response.*` describen valores que debe conservar y sustituir el
+orquestador. No se envían literalmente como datos del cliente.
+
+La sección `diferencias_prompt_api` identifica las instrucciones que aún no
+coinciden con la implementación: `registrar_cliente` ausente, motivo
+`fallo_cotizacion` no admitido, catálogo diferente, checkout en español y
+transferencia humana/entrega WhatsApp no garantizadas por la API. Documentarlas
+no modifica ni habilita esos comportamientos.

@@ -1,0 +1,976 @@
+{
+  "formato": "hunter-api-flow",
+  "version_documento": "1.0.0",
+  "idioma": "es-EC",
+  "proposito": "Documentar orden, condiciones y transferencia de datos de las ocho tools a partir de las instrucciones de Hunter Bot y del código actual.",
+  "tipo_documento": "Especificación documental JSON; no ejecuta llamadas ni es una colección Postman o un archivo OpenAPI.",
+  "alcance": "Documentación en hunter-apis; no modifica código, gateway, agente ni workflows.",
+  "convencion_referencias": {
+    "state.*": "Valor persistido por el orquestador de conversación, no una variable que resuelva automáticamente esta API.",
+    "response.<tool>.*": "Campo obtenido de la última respuesta válida de esa tool para el contrato y cliente actuales.",
+    "response.*": "Respuesta de la tool del paso actual.",
+    "item.*": "Elemento actual de un bucle.",
+    "cliente_o_continuidad": "Dato confirmado del cliente o contexto previo del mismo cliente; pedir solo lo faltante."
+  },
+  "conexion": {
+    "base_url": "${PUBLIC_BASE_URL}",
+    "base_url_local": "http://localhost:3000",
+    "headers_tools": {
+      "Authorization": "Bearer ${CONVAI_API_KEY}",
+      "Content-Type": "application/json"
+    },
+    "credencial_alternativa": "API_KEY se utiliza solo si falta CONVAI_API_KEY.",
+    "despliegue": "Actualizar dominio en configuración de tools (HubSpot/ElevenLabs según integración) y PUBLIC_BASE_URL. No fijar ngrok de un equipo en el JSON.",
+    "validacion": "Campos no declarados se rechazan con 400. No enviar state, consentimiento, monto ni el contenido completo de respuestas anteriores como body."
+  },
+  "estado_conversacion": {
+    "origen": "El host del agente proporciona la continuidad; estas ocho APIs no generan por sí solas todos los placeholders.",
+    "campos": [
+      "cliente_nombre",
+      "cliente_cedula",
+      "cliente_producto",
+      "contrato_id",
+      "cliente_monto",
+      "pago_generado",
+      "factura_enviada",
+      "datos_conocidos",
+      "contexto_previo",
+      "telefono_whatsapp",
+      "consentimiento_empezar",
+      "contratos_por_producto"
+    ],
+    "reglas": [
+      "No mezclar identidades ni contratos de conversaciones distintas.",
+      "No repreguntar lo conocido; confirmar los datos pertinentes.",
+      "pago_generado no significa pago confirmado.",
+      "factura_url u ok:true no significan factura entregada.",
+      "El contrato_id es opaco: copiar exactamente; no derivarlo de placa, cédula o números de ejemplo."
+    ]
+  },
+  "reglas_agente": {
+    "personalidad": "Hunter Bot 🚗; cercano, ágil; español ecuatoriano neutro; mensajes cortos con una idea; emojis solo en saludo y confirmaciones.",
+    "nombre": "Pedirlo al inicio si es nuevo; usarlo con naturalidad cada 2-3 mensajes.",
+    "formato": "Texto plano; sin menús interactivos, cta_url ni WA_INTERACTIVE; si se enfatiza, usar un asterisco y no dos.",
+    "datos": "Solicitar juntos los datos obligatorios faltantes. Nunca pedir teléfono, inferir cédula de fotos ni inventar precios o servicios.",
+    "respuesta": "Cada mensaje recibe respuesta y siguiente paso; no preguntar si se resolvió la consulta.",
+    "consentimiento": "Para cliente nuevo: un mensaje por paso, nombre -> solicitud EMPEZAR -> catálogo solo después de EMPEZAR. Máximo dos solicitudes, ALTO detiene la venta.",
+    "pago": "Cuando diga que pagó, consultar estado en ese mismo turno; no asumir confirmación.",
+    "catalogo": "Usar las respuestas del catálogo/API como fuente. Resolver las discrepancias del prompt antes de prometer prestaciones."
+  },
+  "servicios": {
+    "cotizar_producto_nuevo": {
+      "metodo": "POST",
+      "ruta": "/api/convai/cotizar/nuevo",
+      "proposito": "Cotizar el producto elegido antes de contratar.",
+      "depende_de": [],
+      "entradas": {
+        "codigo_producto": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "eleccion_cliente",
+          "nota": "Opcional en el DTO, pero obligatorio en el caso de uso. No inventar códigos."
+        },
+        "marca": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        },
+        "modelo": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        },
+        "anio": {
+          "tipo": "integer",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad",
+          "minimo": 1950,
+          "maximo": 2100
+        },
+        "ciudad": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        },
+        "uso": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        }
+      },
+      "salidas": {
+        "codigo": "Código elegido; conservar como state.codigo_producto.",
+        "precio": "Precio anual sin IVA; no enviarlo como monto al registro.",
+        "periodo": "anual",
+        "incluye_impuestos": false,
+        "servicios": "Lista oficial que debe explicar el agente."
+      },
+      "efectos": [],
+      "notas": [
+        "La API calcula el precio desde su catálogo; los datos del vehículo no modifican actualmente el precio.",
+        "El consentimiento es una condición del agente, no un campo comprobado por este endpoint."
+      ]
+    },
+    "consultar_servicios_contratados": {
+      "metodo": "POST",
+      "ruta": "/api/convai/servicios",
+      "proposito": "Obtener los productos asociados a cédula y placa antes de renovar.",
+      "depende_de": [],
+      "entradas": {
+        "cedula": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_texto_o_continuidad"
+        },
+        "placa": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        }
+      },
+      "salidas": {
+        "cliente": "Nombre encontrado o cadena vacía.",
+        "servicios": "Array de {codigo,nombre}; puede estar vacío."
+      },
+      "efectos": [],
+      "notas": [
+        "Consulta contratos persistidos por cédula y vehicle.placa. No consulta un sistema externo de contratos.",
+        "No basta con vehiculo como texto libre: esa información no se interpreta para extraer la placa."
+      ]
+    },
+    "cotizar_renovacion": {
+      "metodo": "POST",
+      "ruta": "/api/convai/cotizar/renovacion",
+      "proposito": "Cotizar los servicios contratados que el cliente quiere renovar.",
+      "depende_de": [
+        "consultar_servicios_contratados"
+      ],
+      "entradas": {
+        "cedula": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "state.cedula"
+        },
+        "placa": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "state.placa"
+        },
+        "codigos": {
+          "tipo": "array<string> o string separado por comas",
+          "requerido_api": true,
+          "origen": "seleccion_sobre_response.consultar_servicios_contratados.servicios[].codigo",
+          "nota": "TODOS selecciona los servicios encontrados para esa cédula y placa."
+        }
+      },
+      "salidas": {
+        "items": "Array de {codigo,precio,periodo,iva}; precio incluye IVA.",
+        "total": "Suma de items; no es un contrato ni un identificador de pago."
+      },
+      "efectos": [],
+      "notas": [
+        "Rechaza la solicitud si no encuentra servicios o se piden códigos no contratados."
+      ]
+    },
+    "registrar_contrato": {
+      "metodo": "POST",
+      "ruta": "/api/convai/contratos",
+      "proposito": "Crear o recuperar un contrato pendiente para un producto.",
+      "depende_de": [],
+      "entradas": {
+        "tipo": {
+          "tipo": "venta | renovacion",
+          "requerido_api": false,
+          "origen": "rama_del_flujo",
+          "valor_por_defecto": "venta",
+          "nota": "Enviar renovacion explícitamente en esa rama."
+        },
+        "nombre_completo": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        },
+        "identificacion": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "state.cedula",
+          "nota": "La cédula debe haber sido escrita por el cliente en el chat, sin inferirla de imágenes ni modificarla."
+        },
+        "correo": {
+          "tipo": "email",
+          "requerido_api": true,
+          "origen": "cliente_o_continuidad"
+        },
+        "codigo_producto": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "response.cotizar_producto_nuevo.codigo o response.cotizar_renovacion.items[i].codigo"
+        },
+        "vehiculo": {
+          "tipo": "objeto o string",
+          "requerido_api": false,
+          "origen": "cliente_o_continuidad",
+          "preferencia_documental": {
+            "motor": "dato del cliente",
+            "chasis": "dato del cliente",
+            "placa": "dato del cliente"
+          },
+          "nota": "El DTO actual no valida internamente el objeto vehiculo; la forma indicada es la recomendada para conservar datos útiles."
+        }
+      },
+      "salidas": {
+        "contrato_id": "Guardar exactamente en state.contratos[codigo_producto].contrato_id.",
+        "monto": "Guardar en state.contratos[codigo_producto].monto; importe calculado por el servidor con IVA."
+      },
+      "efectos": [
+        "Resuelve la conversación y el teléfono del remitente en HubSpot.",
+        "Persiste cliente y contrato de manera atómica; reutiliza un pendiente de igual cédula, producto y tipo.",
+        "Intenta escribir contrato_id, whatsapp_optin_requested=true y correo en el contacto de HubSpot."
+      ],
+      "notas": [
+        "La cotización previa es una regla de orquestación; este endpoint no recibe un ID de cotización.",
+        "No enviar telefono, monto ni otros campos no declarados.",
+        "Una única llamada acepta un solo codigo_producto; no acepta arrays ni TODOS.",
+        "La búsqueda de identidad recorre páginas de conversaciones y mensajes dentro de una ventana de 30 minutos. La continuidad no sustituye esa búsqueda.",
+        "Un registro exitoso no certifica suscripción WhatsApp ni ejecución del workflow."
+      ]
+    },
+    "generar_link_pago": {
+      "metodo": "POST",
+      "ruta": "/api/convai/pagos/link",
+      "proposito": "Obtener el enlace firmado del contrato exacto.",
+      "depende_de": [
+        "registrar_contrato"
+      ],
+      "entradas": {
+        "contrato_id": {
+          "tipo": "string",
+          "requerido_api": false,
+          "origen": "response.registrar_contrato.contrato_id o continuidad_verificada",
+          "requerido_por_agente": true
+        },
+        "cedula": {
+          "tipo": "string",
+          "requerido_api": false,
+          "origen": "state.cedula",
+          "uso": "respaldo de API"
+        },
+        "codigo_producto": {
+          "tipo": "string",
+          "requerido_api": false,
+          "origen": "state.codigo_producto",
+          "uso": "respaldo de API"
+        },
+        "telefono": {
+          "tipo": "string",
+          "requerido_api": false,
+          "origen": "contexto_whatsapp",
+          "uso": "aceptado por compatibilidad; no selecciona el contrato"
+        }
+      },
+      "salidas": {
+        "url": "Entregar íntegra, sin reconstruir ni quitar expires/token.",
+        "codigo": "Identificador del contrato.",
+        "contrato_id": "Identificador del contrato.",
+        "monto": "Importe del contrato."
+      },
+      "efectos": [],
+      "notas": [
+        "La API permite respaldo por cédula y producto solo si hay un único contrato pendiente. El agente debe priorizar el ID exacto.",
+        "Generar el enlace no confirma pagos ni dispara un workflow.",
+        "No espera la señal whatsapp_optin_aplicado."
+      ]
+    },
+    "consultar_estado_pago": {
+      "metodo": "POST",
+      "ruta": "/api/convai/pagos/estado",
+      "proposito": "Consultar el estado persistido sin efectos secundarios.",
+      "depende_de": [
+        "registrar_contrato"
+      ],
+      "entradas": {
+        "contrato_id": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "response.registrar_contrato.contrato_id o continuidad_verificada"
+        }
+      },
+      "salidas": {
+        "contrato_id": "ID consultado.",
+        "estado": [
+          "pendiente",
+          "confirmado",
+          "rechazado"
+        ],
+        "monto": "Importe del contrato.",
+        "fecha": "Fecha del cambio de pago o cadena vacía.",
+        "factura_url": "Enlace firmado si está confirmado; cadena vacía en otro estado."
+      },
+      "efectos": [],
+      "notas": [
+        "Llamar en el mismo turno en que el cliente diga que pagó.",
+        "No sustituir la consulta por pago_generado, factura_enviada ni por la afirmación del cliente.",
+        "No escribe en HubSpot."
+      ]
+    },
+    "enviar_factura": {
+      "metodo": "POST",
+      "ruta": "/api/convai/factura/enviar",
+      "proposito": "Generar o reutilizar el PDF y publicar el enlace en el contacto de HubSpot.",
+      "depende_de": [
+        "registrar_contrato",
+        "consultar_estado_pago"
+      ],
+      "entradas": {
+        "contrato_id": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "response.registrar_contrato.contrato_id o continuidad_verificada"
+        },
+        "telefono": {
+          "tipo": "string",
+          "requerido_api": false,
+          "origen": "contexto_whatsapp",
+          "uso": "compatibilidad; el servicio usa el teléfono guardado en el contrato"
+        }
+      },
+      "salidas": {
+        "ok": "true solo confirma escritura de factura_url en HubSpot.",
+        "contrato_id": "ID del contrato.",
+        "url": "Enlace firmado al PDF.",
+        "factura_url": "Mismo enlace firmado."
+      },
+      "efectos": [
+        "Persiste el PDF si no existe.",
+        "Actualiza factura_url en HubSpot; puede activar el workflow configurado para esa propiedad."
+      ],
+      "notas": [
+        "Según la instrucción del agente, llamar para una solicitud de factura después de consultar estado=confirmado.",
+        "La API actual no impone esa condición: también puede emitir un PDF de un contrato pendiente.",
+        "No cambia pago_estado.",
+        "No declarar factura_enviada=true solo por ok:true; falta evidencia de entrega del canal."
+      ]
+    },
+    "escalar_asesor": {
+      "metodo": "POST",
+      "ruta": "/api/convai/crm/escalar",
+      "proposito": "Guardar una solicitud de ayuda como ticket.",
+      "depende_de": [],
+      "entradas": {
+        "telefono": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "contexto_whatsapp",
+          "nota": "Inyectar desde la plataforma. Nunca pedirlo al cliente ni inventarlo."
+        },
+        "motivo": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "razon_de_escalamiento",
+          "valores_aceptados": [
+            "objecion_precio",
+            "indeciso",
+            "fuera_catalogo"
+          ]
+        },
+        "contexto": {
+          "tipo": "string",
+          "requerido_api": true,
+          "origen": "resumen_del_agente_con_datos_y_punto_de_bloqueo"
+        }
+      },
+      "salidas": {
+        "ok": "Confirma la creación del ticket.",
+        "ticket_id": "Guardar para seguimiento."
+      },
+      "efectos": [
+        "Persiste un ticket en PostgreSQL."
+      ],
+      "notas": [
+        "No requiere un contrato previo.",
+        "No asigna actualmente un asesor ni transfiere la conversación en HubSpot.",
+        "fallo_cotizacion devuelve 400; requiere una modificación aprobada del contrato API o corregir la instrucción del agente."
+      ]
+    }
+  },
+  "servicios_soporte": {
+    "checkout": {
+      "metodo": "GET",
+      "ruta": "/pay/:id",
+      "autenticacion": "expires y token en query del enlace firmado",
+      "actor": "navegador del cliente"
+    },
+    "webhook_pago_simulado": {
+      "metodo": "POST",
+      "ruta": "/api/pagos/webhook",
+      "autenticacion": "expires y token en body, firmados para propósito pay",
+      "campos_requeridos": [
+        "contrato_id",
+        "status",
+        "expires",
+        "token"
+      ],
+      "valores_status": [
+        "approved",
+        "rejected"
+      ],
+      "actor": "checkout simulado; no tool del agente"
+    },
+    "pdf": {
+      "metodo": "GET",
+      "ruta": "/receipts/:id",
+      "autenticacion": "expires y token en query firmados para propósito receipt",
+      "actor": "cliente o canal que consume el enlace",
+      "nota": "No reutilizar el token de pago para descargar un PDF."
+    }
+  },
+  "flujos": {
+    "entrada_y_consentimiento": [
+      {
+        "id": "clasificar_continuidad",
+        "accion": "evaluar_contexto",
+        "reglas": [
+          "Si cliente_nombre o contexto_previo tienen contenido, retomar la conversación sin saludo nuevo.",
+          "Solo considerar nuevo si todos los campos de continuidad están vacíos.",
+          "Si hay continuidad parcial sin nombre ni resumen, confirmar lo que falta; no clasificar automáticamente como nuevo."
+        ],
+        "siguientes": {
+          "nuevo": "saludar",
+          "retorno": "retomar",
+          "parcial": "confirmar_contexto"
+        }
+      },
+      {
+        "id": "saludar",
+        "accion": "texto",
+        "mensaje": "¡Hola! Soy Hunter Bot 🚗. ¿Con quién tengo el gusto?",
+        "siguiente": "recibir_nombre"
+      },
+      {
+        "id": "recibir_nombre",
+        "accion": "capturar",
+        "guardar": {
+          "state.nombre": "respuesta del cliente"
+        },
+        "siguiente": "preregistro_externo"
+      },
+      {
+        "id": "preregistro_externo",
+        "accion": "dependencia_no_disponible",
+        "tool_solicitada": "registrar_cliente",
+        "entrada": {
+          "nombre": "state.nombre"
+        },
+        "disponible_en_hunter_apis": false,
+        "nota": "El prompt pide llamarla una sola vez en silencio y continuar si falla. No enviar a una ruta inexistente ni sustituir por registrar_contrato.",
+        "siguiente": "solicitar_consentimiento"
+      },
+      {
+        "id": "solicitar_consentimiento",
+        "accion": "texto",
+        "mensaje": "Gracias, {nombre}. Para continuar, responde EMPEZAR. Si no queres, responde ALTO.",
+        "intentos_maximos": 2,
+        "siguientes": {
+          "EMPEZAR": "mostrar_catalogo",
+          "ALTO": "escalar_sin_consentimiento",
+          "otra_respuesta_primera_vez": "solicitar_consentimiento",
+          "otra_respuesta_segunda_vez": "escalar_sin_consentimiento"
+        }
+      },
+      {
+        "id": "escalar_sin_consentimiento",
+        "accion": "tool",
+        "servicio": "escalar_asesor",
+        "entrada": {
+          "telefono": "state.telefono_whatsapp",
+          "motivo": "indeciso",
+          "contexto": "No continuó con EMPEZAR o indicó ALTO."
+        },
+        "nota": "No avanzar a venta. La API solo crea el ticket; la atención humana inmediata requiere una integración adicional."
+      },
+      {
+        "id": "mostrar_catalogo",
+        "accion": "texto",
+        "guardar": {
+          "state.consentimiento_empezar": true
+        },
+        "regla": "Nombrar servicios del catálogo verificado y preguntar cuál le interesa. No volver a pedir EMPEZAR.",
+        "siguiente": "elegir_rama"
+      },
+      {
+        "id": "retomar",
+        "accion": "texto",
+        "mensaje": "¡Hola de nuevo, {cliente_nombre}! 👋 Seguimos donde quedamos.",
+        "regla": "Retomar el último punto; no solicitar otra vez consentimiento ni datos conocidos. Si falta el nombre, no mostrar el placeholder.",
+        "siguiente": "elegir_rama"
+      },
+      {
+        "id": "confirmar_contexto",
+        "accion": "texto",
+        "regla": "Confirmar únicamente los datos que faltan y el punto a retomar.",
+        "siguiente": "elegir_rama"
+      },
+      {
+        "id": "elegir_rama",
+        "accion": "router",
+        "destinos": {
+          "cotizacion": "venta_nueva",
+          "renovacion": "renovacion",
+          "asesor": "escalamiento",
+          "ya_pago": "seguimiento_pago",
+          "solicita_factura": "solicitud_factura"
+        }
+      }
+    ],
+    "venta_nueva": [
+      {
+        "id": "datos_cotizacion",
+        "accion": "capturar",
+        "campos": [
+          "codigo_producto",
+          "marca",
+          "modelo",
+          "anio",
+          "ciudad",
+          "uso"
+        ],
+        "regla": "Pedir juntos los faltantes y marcarlos obligatorios; reutilizar continuidad."
+      },
+      {
+        "id": "cotizar",
+        "accion": "tool",
+        "servicio": "cotizar_producto_nuevo",
+        "guardar": {
+          "state.codigo_producto": "response.codigo",
+          "state.cotizacion": "response"
+        },
+        "siguiente": "aceptar_cotizacion"
+      },
+      {
+        "id": "aceptar_cotizacion",
+        "accion": "texto",
+        "regla": "Mostrar valor y servicios devueltos; aclarar que precio excluye IVA. Preguntar si avanza con la contratación."
+      },
+      {
+        "id": "datos_contrato",
+        "accion": "capturar",
+        "campos": [
+          "nombre_completo",
+          "identificacion",
+          "correo"
+        ],
+        "opcionales": [
+          "vehiculo"
+        ],
+        "regla": "La cédula debe estar escrita en el chat. Reutilizar los datos del vehículo; preferir objeto con placa si se dispone de ella."
+      },
+      {
+        "id": "registrar",
+        "accion": "tool",
+        "servicio": "registrar_contrato",
+        "entrada": {
+          "tipo": "venta",
+          "nombre_completo": "state.nombre_completo",
+          "identificacion": "state.cedula",
+          "correo": "state.correo",
+          "codigo_producto": "state.codigo_producto",
+          "vehiculo": "state.vehiculo"
+        },
+        "guardar": {
+          "state.contratos[codigo_producto].contrato_id": "response.contrato_id",
+          "state.contratos[codigo_producto].monto": "response.monto"
+        }
+      },
+      {
+        "id": "pagar",
+        "accion": "subflujo",
+        "flujo": "pago",
+        "usar_contrato": "response.registrar_contrato.contrato_id"
+      }
+    ],
+    "renovacion": [
+      {
+        "id": "identificar_servicios",
+        "accion": "capturar",
+        "campos": [
+          "cedula",
+          "placa"
+        ],
+        "regla": "Solicitar juntos solo los faltantes."
+      },
+      {
+        "id": "listar",
+        "accion": "tool",
+        "servicio": "consultar_servicios_contratados",
+        "guardar": {
+          "state.servicios_contratados": "response.servicios"
+        },
+        "si_vacio": "No inventar servicios; revisar cédula y placa. Si persiste, evaluar asesor con un motivo permitido."
+      },
+      {
+        "id": "elegir_servicios",
+        "accion": "texto",
+        "regla": "Pedir códigos entre los devueltos o TODOS."
+      },
+      {
+        "id": "cotizar",
+        "accion": "tool",
+        "servicio": "cotizar_renovacion",
+        "entrada": {
+          "cedula": "state.cedula",
+          "placa": "state.placa",
+          "codigos": "state.codigos_elegidos"
+        },
+        "guardar": {
+          "state.renovacion": "response"
+        }
+      },
+      {
+        "id": "aceptar",
+        "accion": "texto",
+        "regla": "Mostrar items y total con IVA y solicitar confirmación para contratar."
+      },
+      {
+        "id": "registrar_por_producto",
+        "accion": "bucle",
+        "iterar": "state.renovacion.items",
+        "servicio": "registrar_contrato",
+        "entrada": {
+          "tipo": "renovacion",
+          "nombre_completo": "state.nombre_completo",
+          "identificacion": "state.cedula",
+          "correo": "state.correo",
+          "codigo_producto": "item.codigo",
+          "vehiculo": "state.vehiculo_con_placa"
+        },
+        "guardar": {
+          "state.contratos[item.codigo].contrato_id": "response.contrato_id",
+          "state.contratos[item.codigo].monto": "response.monto"
+        },
+        "nota": "Adaptación propuesta a la API de un producto por contrato; recopilar antes los datos personales que falten y explicar los pagos separados. No existe cobro consolidado."
+      },
+      {
+        "id": "pagar_por_contrato",
+        "accion": "bucle",
+        "iterar": "state.contratos_de_esta_renovacion",
+        "flujo": "pago",
+        "regla": "Cada producto conserva su ID y enlace; no reutilizar el último contrato_id para todos."
+      }
+    ],
+    "pago": [
+      {
+        "id": "verificar_id",
+        "accion": "evaluar",
+        "regla": "Usar el contrato_id exacto de registrar_contrato o continuidad. Si falta, volver a registrar con los datos conocidos; no inventarlo."
+      },
+      {
+        "id": "generar",
+        "accion": "tool",
+        "servicio": "generar_link_pago",
+        "entrada": {
+          "contrato_id": "state.contrato_actual.contrato_id"
+        },
+        "guardar": {
+          "state.contrato_actual.url_pago": "response.url",
+          "state.contrato_actual.pago_generado": true
+        }
+      },
+      {
+        "id": "entregar",
+        "accion": "texto",
+        "contenido": "URL completa de response.url en texto plano.",
+        "cierre_obligatorio": "Cuando completes el pago te llegan por acá la confirmación y la factura. Si en 15 minutos no te llegan, escribime y lo reviso.",
+        "nota": "Esta promesa del prompt requiere workflows de entrega operativos. No equivale a una garantía de la API."
+      },
+      {
+        "id": "esperar_cliente",
+        "accion": "esperar_evento",
+        "regla": "El agente no ejecuta el webhook para simular que el cliente ya pagó.",
+        "destinos": {
+          "accion_checkout": "checkout_y_hubspot",
+          "cliente_dice_ya_pago": "seguimiento_pago"
+        }
+      }
+    ],
+    "checkout_y_hubspot": [
+      {
+        "id": "abrir",
+        "accion": "http_navegador",
+        "servicio_soporte": "checkout",
+        "origen": "response.generar_link_pago.url",
+        "regla": "Conservar expires y token de la URL."
+      },
+      {
+        "id": "confirmar_o_rechazar",
+        "accion": "http_navegador",
+        "servicio_soporte": "webhook_pago_simulado",
+        "entrada": {
+          "contrato_id": "contrato de la URL",
+          "status": "approved o rejected según botón",
+          "expires": "query.expires",
+          "token": "query.token"
+        },
+        "regla": "Solo con ENABLE_DEMO_CHECKOUT=true; no es una pasarela real."
+      },
+      {
+        "id": "persistir",
+        "accion": "interno",
+        "regla": "Guardar estado del contrato. Si ya estaba en el estado solicitado, devolver already:true sin repetir los pasos externos."
+      },
+      {
+        "id": "pdf",
+        "accion": "interno",
+        "condicion": "Pago confirmado por primera vez.",
+        "regla": "Generar/reutilizar comprobante PDF persistido. Si falla tras guardar el pago, no asumir que se notificó al CRM."
+      },
+      {
+        "id": "notificar_hubspot",
+        "accion": "integracion",
+        "regla": "Buscar contacto por contrato_id o caché de teléfono. En aprobación, intentar escribir factura_url; después pago_estado=pendiente y luego el estado final con monto, fecha y contrato."
+      },
+      {
+        "id": "workflow",
+        "accion": "dependencia_externa",
+        "regla": "HubSpot evalúa cambios de propiedades. Solo envía si el workflow está publicado, cumple disparadores/reinscripción y la acción tiene canal, plantilla y suscripción válidos.",
+        "nota": "No se envía versión ni se invoca un workflow por ID. No se ha verificado aquí su activación en el portal."
+      }
+    ],
+    "seguimiento_pago": [
+      {
+        "id": "consultar_mismo_turno",
+        "accion": "tool",
+        "servicio": "consultar_estado_pago",
+        "entrada": {
+          "contrato_id": "state.contrato_actual.contrato_id"
+        },
+        "guardar": {
+          "state.contrato_actual.estado_pago": "response.estado"
+        },
+        "ramas": {
+          "confirmado": "Informar el estado confirmado; si pide factura seguir solicitud_factura.",
+          "pendiente": "Indicar que sigue pendiente y acompañar el siguiente paso; no afirmar que pagó.",
+          "rechazado": "Indicar el rechazo con calidez y gestionar el siguiente paso. La API no permite confirmar un contrato rechazado sin revisión."
+        }
+      }
+    ],
+    "solicitud_factura": [
+      {
+        "id": "verificar_pago",
+        "accion": "tool",
+        "servicio": "consultar_estado_pago",
+        "entrada": {
+          "contrato_id": "state.contrato_actual.contrato_id"
+        },
+        "condicion_siguiente": "response.estado == confirmado"
+      },
+      {
+        "id": "publicar_factura",
+        "accion": "tool",
+        "servicio": "enviar_factura",
+        "entrada": {
+          "contrato_id": "state.contrato_actual.contrato_id"
+        },
+        "guardar": {
+          "state.contrato_actual.factura_url": "response.factura_url",
+          "state.contrato_actual.factura_publicada_en_hubspot": "response.ok"
+        },
+        "ramas": {
+          "ok_true": "Confirmar que se solicitó el envío; la entrega depende del workflow.",
+          "ok_false": "Tratar como fallo funcional aunque HTTP sea 201; aplicar un reintento y acompañar al cliente."
+        },
+        "nota": "No escalar únicamente porque pidió factura ni prometer enviarla sin llamar antes a la tool."
+      }
+    ],
+    "escalamiento": [
+      {
+        "id": "preparar",
+        "accion": "evaluar",
+        "regla": "Tomar teléfono de WhatsApp del contexto, motivo permitido y resumen. Si falta el teléfono del contexto, la integración debe resolverlo; no pedírselo al cliente."
+      },
+      {
+        "id": "crear_ticket",
+        "accion": "tool",
+        "servicio": "escalar_asesor",
+        "entrada": {
+          "telefono": "state.telefono_whatsapp",
+          "motivo": "motivo_permitido_segun_caso",
+          "contexto": "resumen"
+        },
+        "guardar": {
+          "state.ticket_id": "response.ticket_id"
+        },
+        "nota": "La promesa de que un asesor lo contactará enseguida exige un circuito humano adicional; este endpoint solo persiste el ticket."
+      }
+    ]
+  },
+  "dependencias_de_datos": [
+    {
+      "de": "cotizar_producto_nuevo.codigo",
+      "a": "registrar_contrato.codigo_producto",
+      "transformacion": "Copia exacta del producto elegido; no transferir precio."
+    },
+    {
+      "de": "consultar_servicios_contratados.servicios[].codigo",
+      "a": "cotizar_renovacion.codigos",
+      "transformacion": "Elegir un subconjunto o TODOS con los mismos cedula y placa."
+    },
+    {
+      "de": "cotizar_renovacion.items[i].codigo",
+      "a": "registrar_contrato.codigo_producto",
+      "transformacion": "Una llamada por producto con tipo=renovacion; no enviar total ni arrays."
+    },
+    {
+      "de": "registrar_contrato.contrato_id",
+      "a": "generar_link_pago.contrato_id",
+      "transformacion": "Copia exacta para ese contrato."
+    },
+    {
+      "de": "registrar_contrato.contrato_id",
+      "a": "consultar_estado_pago.contrato_id",
+      "transformacion": "Copia exacta para ese contrato."
+    },
+    {
+      "de": "registrar_contrato.contrato_id",
+      "a": "enviar_factura.contrato_id",
+      "transformacion": "Copia exacta para ese contrato."
+    },
+    {
+      "de": "generar_link_pago.url",
+      "a": "navegador_cliente",
+      "transformacion": "URL íntegra, incluidos expires y token; no reconstruir."
+    },
+    {
+      "de": "consultar_estado_pago.estado",
+      "a": "condicion_de_enviar_factura",
+      "transformacion": "El agente solo continúa si confirmado; no es un campo del body."
+    },
+    {
+      "de": "enviar_factura.factura_url",
+      "a": "HubSpot.factura_url",
+      "transformacion": "La API ya escribe la propiedad; el agente no necesita otro PATCH."
+    }
+  ],
+  "manejo_fallos": {
+    "reintentos_tools": 1,
+    "excepcion_registrar_cliente": "Según el prompt: una única llamada silenciosa y continuar aunque falle; tool ausente en esta API.",
+    "antes_de_reintentar": "Conservar identidad, producto y contrato_id; no repetir una acción exitosa por un fallo de otra.",
+    "respuesta_cliente": "No exponer códigos, nombres internos ni detalles técnicos. Disculpa breve con siguiente paso concreto; nunca silencio.",
+    "escalamiento_fallo_cotizacion": "Bloqueado por incompatibilidad del prompt: ese motivo no está permitido. No sustituir silenciosamente por otro motivo.",
+    "errores_no_reintentables_sin_correccion": [
+      "400 por campos faltantes/no permitidos",
+      "401 por credencial",
+      "fallo_cotizacion como motivo",
+      "intento de confirmar contrato rechazado"
+    ],
+    "advertencia": "Un reintento con el mismo body no corrige una configuración inválida; documentar el incidente para el operador. Repetir un pago ya confirmado no reenvía notificaciones a HubSpot."
+  },
+  "diferencias_prompt_api": [
+    {
+      "id": "registrar_cliente_ausente",
+      "prompt": "Llamar al recibir el nombre.",
+      "api": "No forma parte de las ocho tools copiadas; /api/convai/clientes/registrar no está expuesto.",
+      "decision_pendiente": "Mantener esa capacidad externa o autorizar ampliar la API; mientras tanto no documentarla como disponible."
+    },
+    {
+      "id": "motivo_no_aceptado",
+      "prompt": "escalar_asesor(motivo=fallo_cotizacion)",
+      "api": "Solo objecion_precio, indeciso, fuera_catalogo.",
+      "decision_pendiente": "Alinear enum e instrucciones antes de ejecutar esa rama."
+    },
+    {
+      "id": "asesor_sin_transferencia",
+      "prompt": "Avisar que un asesor contacta enseguida.",
+      "api": "Solo persiste ticket; no asigna ni notifica al equipo.",
+      "decision_pendiente": "Implementar/verificar el circuito humano antes de prometer contacto inmediato."
+    },
+    {
+      "id": "catalogo_distinto",
+      "prompt": {
+        "SEG01": [
+          "paralizador"
+        ],
+        "SEG02": [
+          "rastreo satelital"
+        ],
+        "SEG03": [
+          "paralizador",
+          "botón de pánico",
+          "parqueo seguro"
+        ]
+      },
+      "api": {
+        "SEG01": [
+          "Paralizador"
+        ],
+        "SEG02": [
+          "Rastreo satelital",
+          "Paralizador"
+        ],
+        "SEG03": [
+          "Rastreo satelital",
+          "Paralizador",
+          "Botón de pánico"
+        ]
+      },
+      "decision_pendiente": "Validar catálogo comercial; no agregar parqueo seguro sin respaldarlo en la fuente autorizada."
+    },
+    {
+      "id": "checkout_simulado_espanol",
+      "prompt": "Pasarela en inglés; explicar fecha y CVV.",
+      "api": "Página en español, campos de prueba de nombre/número de solo lectura, sin vencimiento ni CVV y sin cobros reales.",
+      "decision_pendiente": "Actualizar la instrucción para describir esta simulación; no solicitar datos reales de tarjeta."
+    },
+    {
+      "id": "consentimiento_no_equivale_suscripcion",
+      "prompt": "EMPEZAR habilita avanzar.",
+      "api": "La API no recibe ni valida EMPEZAR; el registro marca whatsapp_optin_requested. Eso no prueba suscripción vigente.",
+      "decision_pendiente": "El host debe respetar el consentimiento y HubSpot gestionar la suscripción; no tratar una propiedad custom como consentimiento real."
+    },
+    {
+      "id": "renovacion_multiple",
+      "prompt": "Permite renovar varios servicios.",
+      "api": "Un producto por contrato/enlace.",
+      "decision_pendiente": "El bucle documentado es una adaptación propuesta; si se necesita un único pago consolidado, ampliar el modelo."
+    },
+    {
+      "id": "entrega_no_garantizada",
+      "prompt": "Prometer confirmación y factura por el canal tras pagar.",
+      "api": "Escrituras HubSpot de mejor esfuerzo, sin cola persistente; workflows del portal no verificados.",
+      "decision_pendiente": "Validar entrega integral antes de usar esa promesa; no marcar factura entregada por ok:true."
+    }
+  ],
+  "fuentes_codigo": [
+    "src/interfaces/controllers/convai.controller.ts",
+    "src/interfaces/dto/convai.dto.ts",
+    "src/application/use-cases/register-tool-contract.use-case.ts",
+    "src/application/use-cases/convai-catalogue.use-cases.ts",
+    "src/application/use-cases/convai-payment.use-cases.ts",
+    "src/application/use-cases/send-tool-invoice.use-case.ts",
+    "src/infrastructure/convai/conversation-directory.service.ts",
+    "src/infrastructure/convai/hubspot.service.ts",
+    "src/domain/entities/product.entity.ts",
+    "src/interfaces/controllers/tool-assets.controller.ts"
+  ],
+  "documentacion_relacionada": "../README.md",
+  "ejemplo_transferencia_contrato": {
+    "nota": "Valores ilustrativos; sustituir por la respuesta real. No usar este ID en una conversación.",
+    "respuesta_registrar_contrato": {
+      "contrato_id": "CT-EJEMPLO",
+      "monto": 302.9
+    },
+    "siguiente_body_generar_link_pago": {
+      "contrato_id": "CT-EJEMPLO"
+    },
+    "body_consultar_estado_pago_cuando_diga_ya_pago": {
+      "contrato_id": "CT-EJEMPLO"
+    },
+    "body_enviar_factura_solo_tras_verificar_confirmado": {
+      "contrato_id": "CT-EJEMPLO"
+    },
+    "no_transferir": [
+      "No enviar monto a generar_link_pago.",
+      "No enviar estado a enviar_factura.",
+      "No enviar la respuesta completa como body."
+    ]
+  }
+}
